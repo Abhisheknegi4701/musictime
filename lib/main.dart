@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:math';
@@ -7,9 +8,11 @@ import 'dart:ui';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:assets_audio_player/assets_audio_player.dart';
 import 'package:flutter/material.dart';
-import 'package:geocode/geocode.dart';
-import 'package:location/location.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'model.dart';
@@ -24,10 +27,59 @@ final ReceivePort port = ReceivePort();
 
 SharedPreferences? prefs;
 
+bool onIosBackground(ServiceInstance service) {
+  WidgetsFlutterBinding.ensureInitialized();
+  // bring to foreground
+  Timer.periodic(const Duration(seconds: 60), (timer) async {
+    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    List<Placemark> placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+    print(placemarks);
+    Placemark place = placemarks[0];
+    getwhether(place.subLocality);
+  });
+  return true;
+}
+
+void onStart(ServiceInstance service) {
+
+  // bring to foreground
+  Timer.periodic(const Duration(seconds: 10), (timer) async {
+    
+  });
+
+}
+
+Future<void> initializeService() async {
+  final service = FlutterBackgroundService();
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      // this will executed when app is in foreground or background in separated isolate
+      onStart: onStart,
+
+      // auto start service
+      autoStart: true,
+      isForegroundMode: true,
+      foregroundServiceNotificationTitle: "Pearl Client Workspace",
+      foregroundServiceNotificationContent: "App is working in Background",
+    ),
+    iosConfiguration: IosConfiguration(
+      // auto start service
+      autoStart: true,
+
+      // this will executed when app is in foreground in separated isolate
+      onForeground: onStart,
+
+      // you have to enable background fetch capability on xcode project
+      onBackground: onIosBackground,
+    ),
+  );
+  service.startService();
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AndroidAlarmManager.initialize();
-
+  await initializeService();
   // Register the UI isolate's SendPort to allow for communication from the
   // background isolate.
   IsolateNameServer.registerPortWithName(
@@ -45,22 +97,12 @@ Future<void> main() async {
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Flutter Demo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
         primarySwatch: Colors.blue,
       ),
       home: const MyHomePage(title: 'Flutter Demo Home Page'),
@@ -71,15 +113,6 @@ class MyApp extends StatelessWidget {
 class MyHomePage extends StatefulWidget {
   const MyHomePage({Key? key, required this.title}) : super(key: key);
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
   final String title;
 
   @override
@@ -87,12 +120,12 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  Location location = Location();
   List<String> weatherlist = ["Select Weather", "Sunny", "Cloudy", "Mist"];
   TimeOfDay selectedTime = TimeOfDay.now();
   String musictext = "Select Music";
   String selectedwether = "Select Weather";
   AssetsAudioPlayer assetsAudioPlayer = AssetsAudioPlayer();
+  var seleTime;
 
   static SendPort? uiSendPort;
 
@@ -101,9 +134,6 @@ class _MyHomePageState extends State<MyHomePage> {
     // TODO: implement initState
     super.initState();
     getlocation();
-    location.onLocationChanged.listen((LocationData currentLocation) {
-      // Use current location
-    });
     /*assetsAudioPlayer.open(
       Audio("Assets/Yaara Teri Yaari.mp3"),
     );*/
@@ -219,9 +249,22 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
             GestureDetector(
               onTap: () async {
-                developer.log(selectedTime.toString());
+                dynamic currentTime = DateFormat("HH:mm").format(DateTime.now());
+                var selected=   DateTime(selectedTime.hour, selectedTime.minute);
+                var time=DateFormat.jm().format(selected);
+
+                print("one "+currentTime.toString());
+                print("two "+seleTime.toString());
+                var format = DateFormat("HH:mm");
+                var one = format.parse(currentTime);
+                var two = format.parse(seleTime);
+                print("${two.difference(one)}");
+                var diff=two.difference(one);
+                // var d=DateTime.parse(diff.toString());
+                print("sada"+diff.toString().split('.')[0]);
+                var h=diff.inSeconds.toString();
                 await AndroidAlarmManager.periodic(
-                  const Duration(seconds: 5),
+                  Duration(seconds: int.parse(h)),
                   // Ensure we have a unique alarm ID.
                   Random().nextInt(pow(2, 31) as int),
                   callback,
@@ -269,55 +312,68 @@ class _MyHomePageState extends State<MyHomePage> {
     if (picked_s != null && picked_s != selectedTime) {
       setState(() {
         selectedTime = picked_s;
+        seleTime=picked_s.hour.toString()+":"+picked_s.minute.toString();
       });
     }
   }
 
   Future<void> getlocation() async {
-    Location location = Location();
+    bool serviceEnabled;
+    LocationPermission permission;
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // Location services are not enabled don't continue
+      // accessing the position and request users of the
+      // App to enable the location services.
+      await Geolocator.openLocationSettings();
+      return Future.error('Location services are disabled.');
+    }
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
 
-    bool _serviceEnabled;
-    PermissionStatus _permissionGranted;
-    LocationData _locationData;
-
-    _permissionGranted = await location.hasPermission();
-    if (_permissionGranted == PermissionStatus.denied) {
-      _permissionGranted = await location.requestPermission();
-      if (_permissionGranted != PermissionStatus.granted) {
-        return;
+        return Future.error('Location permissions are denied');
       }
     }
-
-    _locationData = await location.getLocation();
-    GeoCode geoCode = GeoCode();
-    Address address = await geoCode.reverseGeocoding(
-        latitude: _locationData.latitude!.toDouble(),
-        longitude: _locationData.longitude!.toDouble());
-    getwhether(address.city);
+    if (permission == LocationPermission.deniedForever) {
+      // Permissions are denied forever, handle appropriately.
+      return Future.error(
+          'Location permissions are permanently denied, we cannot request permissions.');
+    }
+    // When we reach here, permissions are granted and we can
+    // continue accessing the position of the device.
+    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    List<Placemark> placemarks = await placemarkFromCoordinates(position.latitude, position.longitude);
+    print(placemarks);
+    Placemark place = placemarks[0];
+    getwhether(place.subLocality);
   }
 
-  Future<List<Whether>> getwhether(String? locality) async {
-    var url = "https://api.openweathermap.org/data/2.5/weather?q=" +
-        locality.toString() +
-        "&APPID=43ea6baaad7663dc17637e22ee6f78f2";
+}
 
-    // Starting Web API Call.
-    var response = await http.get(Uri.parse(url));
+Future<List<Whether>> getwhether(String? locality) async {
+  var url = "https://api.openweathermap.org/data/2.5/weather?q=" +
+      locality.toString() +
+      "&APPID=43ea6baaad7663dc17637e22ee6f78f2";
 
-    if (response.statusCode == 200) {
-      //final items = json.decode(response.body).cast<Map<String, dynamic>>();
+  // Starting Web API Call.
+  var response = await http.get(Uri.parse(url));
 
-      List<Whether> whetherlist = json
-          .decode(response.body)["data"]
-          .map<Whether>((json) => Whether.fromJson(json))
-          .toList();
+  if (response.statusCode == 200) {
+    //final items = json.decode(response.body).cast<Map<String, dynamic>>();
 
-      //log("thisone" + question.toString());
+    List<Whether> whetherlist = json
+        .decode(response.body)["data"]
+        .map<Whether>((json) => Whether.fromJson(json))
+        .toList();
 
-      return whetherlist;
-      //showToast(profile.toString());
-    } else {
-      throw Exception('Failed to load data from Server.');
-    }
+    //log("thisone" + question.toString());
+
+    return whetherlist;
+    //showToast(profile.toString());
+  } else {
+    throw Exception('Failed to load data from Server.');
   }
 }
+
